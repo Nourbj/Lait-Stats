@@ -24,12 +24,12 @@ function App() {
 
     if (!nextFile.name.match(/\.xlsx?$/i)) {
       setFile(null);
-      setStatus({ type: 'error', message: 'Veuillez sÃ©lectionner un fichier .xlsx ou .xls.' });
+      setStatus({ type: 'error', message: 'Veuillez sélectionner un fichier .xlsx ou .xls.' });
       return;
     }
 
     setFile(nextFile);
-    setStatus({ type: 'success', message: 'Fichier chargÃ©. Vous pouvez tÃ©lÃ©charger le rapport.' });
+    setStatus({ type: 'success', message: 'Fichier chargé. Vous pouvez télécharger le rapport.' });
   }
 
   function clearFile() {
@@ -44,7 +44,7 @@ function App() {
     if (!canDownload) return;
 
     setIsDownloading(true);
-    setStatus({ type: '', message: 'Generation du rapport en cours...' });
+    setStatus({ type: '', message: 'Génération du rapport en cours...' });
 
     const formData = new FormData();
     formData.append('file', file);
@@ -53,7 +53,7 @@ function App() {
       const response = await fetch(`${API}/download`, { method: 'POST', body: formData });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || 'Erreur lors de la generation.');
+        throw new Error(payload.error || 'Erreur lors de la génération.');
       }
 
       const blob = await response.blob();
@@ -66,7 +66,7 @@ function App() {
       link.remove();
       URL.revokeObjectURL(url);
 
-      setStatus({ type: 'success', message: 'Rapport tÃ©lÃ©chargÃ© avec succÃ©s.' });
+      setStatus({ type: 'success', message: 'Rapport téléchargé avec succès.' });
     } catch (error) {
       setStatus({ type: 'error', message: error.message });
     } finally {
@@ -85,12 +85,12 @@ function App() {
       </header>
 
       <main className="main-content">
-        <section className="workspace" aria-label="Generation de rapport lait">
+        <section className="workspace" aria-label="Génération de rapport lait">
           <div className="intro">
             <div className="eyebrow">Rapport automatique</div>
             <h1>Importer un fichier lait.</h1>
             <p>
-              Ajoutez le fichier Excel source, puis tÃ©lÃ©chargez directement le rapport gÃ©nÃ©rÃ©.
+              Ajoutez le fichier Excel source, puis téléchargez directement le rapport généré.
             </p>
           </div>
 
@@ -115,8 +115,8 @@ function App() {
               />
               <div className="drop-icon" aria-hidden="true">+</div>
               <div className="drop-title">Glissez votre fichier Excel ici</div>
-              <div className="drop-sub">ou cliquez pour sÃ©lectionner un fichier</div>
-              <div className="formats" aria-label="Formats acceptes">
+              <div className="drop-sub">ou cliquez pour sélectionner un fichier</div>
+              <div className="formats" aria-label="Formats acceptés">
                 <span className="format-badge">.xlsx</span>
                 <span className="format-badge">.xls</span>
               </div>
@@ -126,7 +126,7 @@ function App() {
               <div className="file-card">
                 <div className="file-details">
                   <div className="file-name" title={file.name}>{file.name}</div>
-                  <div className="file-meta">{formatSize(file.size)} - pret pour generation</div>
+                  <div className="file-meta">{formatSize(file.size)} - prêt pour génération</div>
                 </div>
                 <button className="btn btn-secondary" type="button" onClick={clearFile}>Changer</button>
               </div>
@@ -135,7 +135,7 @@ function App() {
             <div className="actions">
               <button className="btn btn-primary" type="button" disabled={!canDownload} onClick={downloadReport}>
                 {isDownloading && <span className="spinner" aria-hidden="true" />}
-                {isDownloading ? 'Generation...' : 'TÃ©lÃ©charger le rapport'}
+                {isDownloading ? 'Génération...' : 'Télécharger le rapport'}
               </button>
             </div>
 
@@ -144,7 +144,7 @@ function App() {
         </section>
       </main>
 
-      <footer>LaitTrack - Import et tÃ©lÃ©chargement du rapport Excel</footer>
+      <footer>LaitTrack - Import et téléchargement du rapport Excel</footer>
     </div>
   );
 }
