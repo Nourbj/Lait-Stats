@@ -1,69 +1,149 @@
-# 🥛 LaitTrack — Suivi automatisé des paquets de lait
+# LaitTrack - Import et rapport Excel
 
-Application web complète pour traiter et visualiser les données de prise de lait des employés.
+Application web pour importer un fichier Excel de suivi des paquets de lait par employe et telecharger un rapport Excel genere automatiquement.
+
+Le projet utilise :
+
+- **Backend** : Flask + openpyxl
+- **Frontend** : React
+- **Format d'entree** : fichier Excel `.xlsx` ou `.xls`
 
 ## Structure du projet
 
-```
+```text
 lait-app/
-├── backend/
-│   ├── app.py              ← API Flask (Python)
-│   └── requirements.txt    ← Dépendances Python
-└── frontend/
-    └── index.html          ← Application frontend (HTML/JS, zéro dépendance)
+|-- backend/
+|   |-- app.py
+|   `-- requirements.txt
+|-- frontend/
+|   |-- package.json
+|   |-- package-lock.json
+|   |-- public/
+|   |   `-- index.html
+|   `-- src/
+|       |-- App.js
+|       |-- App.css
+|       `-- index.js
+`-- README.md
 ```
 
-## 🚀 Lancement
+## Fonctionnalites actuelles
 
-### 1. Démarrer le backend (API)
+- Import d'un fichier Excel par clic ou drag and drop.
+- Validation du format `.xlsx` / `.xls`.
+- Envoi du fichier au backend Flask.
+- Generation d'un rapport Excel.
+- Telechargement automatique du rapport.
 
-```bash
+Le dashboard a ete retire pour le moment. L'interface garde seulement l'import du fichier et le bouton de telechargement.
+
+## Format du fichier Excel attendu
+
+Le fichier source doit avoir cette structure :
+
+| Employe | 01/06 | 02/06 | 03/06 |
+|---------|-------|-------|-------|
+| Ahmed   | 1     | 0     | 1     |
+| Fatima  | 0     | 1     | 1     |
+
+Regles :
+
+- Colonne A : noms des employes.
+- Ligne 1 : dates.
+- Valeur `1` : l'employe a pris un paquet de lait.
+- Valeur `0` : l'employe n'a pas pris de paquet.
+
+## Installation
+
+### 1. Backend
+
+Depuis la racine du projet :
+
+```powershell
 cd backend
 pip install -r requirements.txt
+```
+
+### 2. Frontend
+
+Dans un autre terminal :
+
+```powershell
+cd frontend
+npm install
+```
+
+## Demarrage du projet
+
+### 1. Lancer le backend Flask
+
+```powershell
+cd C:\Users\nbenj\Desktop\lait-app\lait-app\backend
 python app.py
 ```
 
-Le serveur démarre sur **http://localhost:5000**
+Le backend demarre sur :
 
-### 2. Ouvrir le frontend
+```text
+http://localhost:5000
+```
 
-Ouvrez simplement `frontend/index.html` dans votre navigateur.
-> ⚠️ Le backend doit être lancé pour que l'app fonctionne.
+### 2. Lancer le frontend React
 
----
+Dans un deuxieme terminal :
 
-## 📊 Format du fichier Excel attendu
+```powershell
+cd C:\Users\nbenj\Desktop\lait-app\lait-app\frontend
+npm start
+```
 
-| Employé         | 01/06 | 02/06 | 03/06 | … |
-|-----------------|-------|-------|-------|---|
-| Ahmed Ben Ali   | 1     | 0     | 1     | … |
-| Fatima Khelil   | 0     | 1     | 1     | … |
+Le frontend demarre sur :
 
-- **Colonne A** : Noms des employés (ligne 1 = entête "Employé")
-- **Colonnes suivantes** : Une colonne par jour (entête = date)
-- **Valeurs** : `1` = a pris un paquet de lait, `0` = n'a pas pris
+```text
+http://localhost:3000
+```
 
----
+## API
 
-## ✨ Fonctionnalités
+### `GET /api/health`
 
-- **Drag & drop** du fichier Excel
-- **Dashboard interactif** :
-  - KPIs globaux (total paquets, taux, top employé)
-  - Graphique à barres par employé
-  - Donut chart de répartition
-  - Carte de chaleur (heatmap) jour par jour
-  - Tableau de classement détaillé
-- **Export Excel** du rapport avec 2 feuilles :
-  - Détail journalier (données colorisées + totaux automatiques)
-  - Récapitulatif (résumé par employé avec pourcentages)
+Verifie que l'API est active.
 
----
+### `POST /api/download`
 
-## 🔌 API Endpoints
+Recoit un fichier Excel et retourne un rapport Excel telechargeable.
 
-| Méthode | Route | Description |
-|---------|-------|-------------|
-| `POST` | `/api/preview` | Analyse le fichier, retourne JSON |
-| `POST` | `/api/download` | Génère et télécharge le rapport Excel |
-| `GET` | `/api/health` | Vérification que l'API est active |
+Champ attendu dans le formulaire :
+
+```text
+file
+```
+
+### `POST /api/preview`
+
+Analyse le fichier et retourne les donnees JSON.
+
+Cette route existe encore dans le backend, mais elle n'est plus utilisee par le frontend actuel car le dashboard est masque.
+
+## Fichiers importants
+
+- `backend/app.py` : API Flask, lecture Excel et generation du rapport.
+- `frontend/src/App.js` : interface React et logique d'import/telechargement.
+- `frontend/src/App.css` : styles du theme clair.
+- `frontend/public/index.html` : fichier HTML racine utilise par React.
+
+## Commandes utiles
+
+Build React :
+
+```powershell
+cd frontend
+npm run build
+```
+
+Verifier les dependances Python :
+
+```powershell
+cd backend
+pip install -r requirements.txt
+```
