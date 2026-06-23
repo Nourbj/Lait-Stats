@@ -10,6 +10,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.colors import HexColor
 from reportlab.pdfgen import canvas
 import re
+import csv
 
 app = Flask(__name__)
 CORS(app)
@@ -28,6 +29,57 @@ def normalize_str(s):
         if unicodedata.category(c) != 'Mn'
     )
     return s_str
+
+def is_csv_bytes(file_bytes):
+    if file_bytes.startswith(b'PK\x03\x04'):
+        return False
+    if file_bytes.startswith(b'\xd0\xcf\x11\xe0'):
+        return False
+    return True
+
+def parse_csv_to_rows(file_bytes):
+    text = None
+    for encoding in ['utf-8-sig', 'utf-8', 'iso-8859-1']:
+        try:
+            text = file_bytes.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise ValueError("Impossible de décoder le fichier CSV.")
+    
+    first_line = text.split('\n')[0] if text else ""
+    delimiter = ','
+    if ';' in first_line:
+        delimiter = ';'
+    elif '\t' in first_line:
+        delimiter = '\t'
+        
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    return list(reader)
+
+def load_workbook_from_bytes(file_bytes, data_only=False):
+    if is_csv_bytes(file_bytes):
+        rows = parse_csv_to_rows(file_bytes)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "CSV Data"
+        for r_idx, row in enumerate(rows, 1):
+            for c_idx, val in enumerate(row, 1):
+                if val is not None:
+                    val_str = str(val).strip()
+                    if val_str.isdigit():
+                        ws.cell(row=r_idx, column=c_idx, value=int(val_str))
+                    else:
+                        try:
+                            ws.cell(row=r_idx, column=c_idx, value=float(val_str.replace(',', '.')))
+                        except ValueError:
+                            ws.cell(row=r_idx, column=c_idx, value=val_str)
+                else:
+                    ws.cell(row=r_idx, column=c_idx, value="")
+        return wb
+    else:
+        return openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=data_only)
 
 def format_single_name(name_str):
     if not name_str:
@@ -260,9 +312,7 @@ def detect_structure(ws):
     return header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col
 
 
-def process_workbook_in_place(file_bytes):
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
-    
+def process_workbook_in_place(wb):
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         
@@ -384,13 +434,11 @@ def process_workbook_in_place(file_bytes):
                 cell = ws.cell(row=r, column=total_col, value=col_sum)
                 copy_style(ws.cell(row=r, column=sum_cols[-1]), cell)
                 
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
+    return wb
+
 
 def lire_excel_dynamique(file_bytes):
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    wb = load_workbook_from_bytes(file_bytes, data_only=True)
     
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -651,7 +699,7 @@ def labels():
         file_bytes = f.read()
         
         # Load workbook
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+        wb = load_workbook_from_bytes(file_bytes, data_only=True)
         
         labels_data = []
         
@@ -803,19 +851,45 @@ def preview():
 
 @app.route("/api/download", methods=["POST"])
 def download():
-    """Génère et retourne le fichier Excel rapport."""
+    """Génère et retourne le fichier Excel ou CSV rapport."""
     if "file" not in request.files:
         return jsonify({"error": "Aucun fichier reçu"}), 400
     f = request.files["file"]
     try:
         file_bytes = f.read()
-        rapport_bytes = process_workbook_in_place(file_bytes)
-        return send_file(
-            io.BytesIO(rapport_bytes),
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True,
-            download_name=f"rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-        )
+        is_csv = is_csv_bytes(file_bytes)
+        
+        # Load workbook
+        wb = load_workbook_from_bytes(file_bytes)
+        processed_wb = process_workbook_in_place(wb)
+        
+        if is_csv:
+            # Export to CSV
+            output = io.StringIO()
+            writer = csv.writer(output, delimiter=';') # Use semicolon as standard for European Excel
+            ws = processed_wb.active
+            for row in ws.iter_rows(values_only=True):
+                writer.writerow([val if val is not None else "" for val in row])
+            
+            csv_bytes = output.getvalue().encode('utf-8-sig') # UTF-8 with BOM for Excel compatibility
+            return send_file(
+                io.BytesIO(csv_bytes),
+                mimetype="text/csv",
+                as_attachment=True,
+                download_name=f"rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+            )
+        else:
+            # Export to Excel
+            buf = io.BytesIO()
+            processed_wb.save(buf)
+            buf.seek(0)
+            excel_bytes = buf.getvalue()
+            return send_file(
+                io.BytesIO(excel_bytes),
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                as_attachment=True,
+                download_name=f"rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

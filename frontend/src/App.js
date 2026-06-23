@@ -15,7 +15,7 @@ function App() {
   const [isDownloadingLabels, setIsDownloadingLabels] = useState(false);
   const [status, setStatus] = useState({
     type: '',
-    message: 'Sélectionnez un fichier Excel pour calculer automatiquement le total par employé.'
+    message: 'Sélectionnez un fichier Excel ou CSV pour calculer automatiquement le total par employé.'
   });
 
   const canDownload = Boolean(file) && !isDownloading && !isDownloadingLabels;
@@ -24,9 +24,9 @@ function App() {
   function selectFile(nextFile) {
     if (!nextFile) return;
 
-    if (!nextFile.name.match(/\.xlsx?$/i)) {
+    if (!nextFile.name.match(/\.(xlsx?|csv)$/i)) {
       setFile(null);
-      setStatus({ type: 'error', message: 'Veuillez sélectionner un fichier .xlsx ou .xls.' });
+      setStatus({ type: 'error', message: 'Veuillez sélectionner un fichier .xlsx, .xls ou .csv.' });
       return;
     }
 
@@ -38,7 +38,7 @@ function App() {
     setFile(null);
     setStatus({
       type: '',
-      message: 'Sélectionnez un fichier Excel pour calculer automatiquement le total par employé.'
+      message: 'Sélectionnez un fichier Excel ou CSV pour calculer automatiquement le total par employé.'
     });
   }
 
@@ -62,7 +62,8 @@ function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `rapport_lait_${Date.now()}.xlsx`;
+      const extension = file.name.match(/\.csv$/i) ? 'csv' : 'xlsx';
+      link.download = `rapport_lait_${Date.now()}.${extension}`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -117,16 +118,16 @@ function App() {
           <div className="logo-icon" aria-hidden="true">L</div>
           Lait<span>Track</span>
         </div>
-        <div className="header-badge">Import Excel</div>
+        <div className="header-badge">Import Excel / CSV</div>
       </header>
 
       <main className="main-content">
         <section className="workspace" aria-label="Génération de rapport lait">
           <div className="intro">
             <div className="eyebrow">Rapport automatique</div>
-            <h1>Importer un fichier Excel.</h1>
+            <h1>Importer un fichier Excel ou CSV.</h1>
             <p>
-              Ajoutez votre fichier Excel de suivi, puis téléchargez le même fichier enrichi d'une colonne de total pour chaque employé.
+              Ajoutez votre fichier Excel ou CSV de suivi, puis téléchargez le même fichier enrichi d'une colonne de total pour chaque employé.
             </p>
           </div>
 
@@ -146,15 +147,16 @@ function App() {
             >
               <input
                 type="file"
-                accept=".xlsx,.xls"
+                accept=".xlsx,.xls,.csv"
                 onChange={(event) => selectFile(event.target.files?.[0])}
               />
               <div className="drop-icon" aria-hidden="true">+</div>
-              <div className="drop-title">Glissez votre fichier Excel ici</div>
+              <div className="drop-title">Glissez votre fichier Excel ou CSV ici</div>
               <div className="drop-sub">ou cliquez pour sélectionner un fichier</div>
               <div className="formats" aria-label="Formats acceptés">
                 <span className="format-badge">.xlsx</span>
                 <span className="format-badge">.xls</span>
+                <span className="format-badge">.csv</span>
               </div>
             </label>
 
