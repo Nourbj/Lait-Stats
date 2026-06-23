@@ -270,19 +270,30 @@ def process_workbook_in_place(file_bytes):
         start_col_letter = get_column_letter(sum_cols[0])
         end_col_letter = get_column_letter(sum_cols[-1])
         
-        # Populate formulas for employees
+        # Populate totals for employees
         for r in emp_rows:
-            formula = f"=SUM({start_col_letter}{r}:{end_col_letter}{r})"
-            cell = ws.cell(row=r, column=total_col, value=formula)
+            row_sum = 0
+            for c in sum_cols:
+                v = ws.cell(row=r, column=c).value
+                if v is not None:
+                    if isinstance(v, (int, float)):
+                        row_sum += v
+                    elif isinstance(v, str):
+                        val_str = v.strip()
+                        if val_str.isdigit():
+                            row_sum += int(val_str)
+            cell = ws.cell(row=r, column=total_col, value=row_sum)
             copy_style(ws.cell(row=r, column=sum_cols[-1]), cell)
             
-        # Populate formulas for summary rows
+        # Populate totals for summary rows
         if emp_rows:
-            first_emp_row = emp_rows[0]
-            last_emp_row = emp_rows[-1]
             for r in total_rows:
-                formula = f"=SUM({total_col_letter}{first_emp_row}:{total_col_letter}{last_emp_row})"
-                cell = ws.cell(row=r, column=total_col, value=formula)
+                col_sum = 0
+                for er in emp_rows:
+                    v = ws.cell(row=er, column=total_col).value
+                    if isinstance(v, (int, float)):
+                        col_sum += v
+                cell = ws.cell(row=r, column=total_col, value=col_sum)
                 copy_style(ws.cell(row=r, column=sum_cols[-1]), cell)
                 
     buf = io.BytesIO()
