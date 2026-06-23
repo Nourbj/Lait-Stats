@@ -634,11 +634,11 @@ def generer_etiquettes_pdf(employees_data):
         c.setLineWidth(0.5)
         c.line(x + 10, y + label_height - 20, x + label_width - 10, y + label_height - 20)
         
-        # Draw "LaitTrack • [Period]" tiny brand label
+        # Draw "[Period]" tiny brand label
         period = emp.get("period", "Étiquette")
         c.setFillColor(secondary_color)
         c.setFont("Helvetica-Bold", 7)
-        c.drawString(x + 12, y + label_height - 14, f"LaitTrack • {period}")
+        c.drawString(x + 12, y + label_height - 14, period)
         
         # 3. Draw Employee Name
         name = emp["nom"]
