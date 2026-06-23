@@ -29,6 +29,55 @@ def normalize_str(s):
     )
     return s_str
 
+def format_single_name(name_str):
+    if not name_str:
+        return ""
+    words = name_str.split()
+    if not words:
+        return ""
+    if len(words) == 1:
+        return words[0].title()
+    
+    first_word = words[0]
+    first_is_upper = first_word.isupper() and len(first_word) > 1
+    others_all_upper = all(w.isupper() for w in words[1:])
+    
+    if first_is_upper and not others_all_upper:
+        idx = 0
+        while idx < len(words) and words[idx].isupper():
+            idx += 1
+        if idx < len(words):
+            prenom_part = " ".join(words[idx:])
+            nom_part = " ".join(words[:idx])
+            return f"{prenom_part.title()} {nom_part.upper()}"
+            
+    idx = len(words) - 1
+    while idx >= 0 and words[idx].isupper():
+        idx -= 1
+    
+    if idx >= 0 and idx < len(words) - 1:
+        prenom_part = " ".join(words[:idx+1])
+        nom_part = " ".join(words[idx+1:])
+        return f"{prenom_part.title()} {nom_part.upper()}"
+        
+    return f"{words[0].title()} {' '.join(words[1:]).upper()}"
+
+def format_employee_name(prenom_val, nom_val):
+    if prenom_val is not None and nom_val is not None:
+        p_str = str(prenom_val).strip()
+        n_str = str(nom_val).strip()
+        if p_str and n_str:
+            return f"{p_str.title()} {n_str.upper()}"
+        elif p_str:
+            return format_single_name(p_str)
+        elif n_str:
+            return format_single_name(n_str)
+    elif nom_val is not None:
+        return format_single_name(str(nom_val).strip())
+    elif prenom_val is not None:
+        return format_single_name(str(prenom_val).strip())
+    return ""
+
 def copy_style(src_cell, dst_cell):
     if src_cell.has_style:
         dst_cell.font = copy(src_cell.font)
@@ -118,6 +167,32 @@ def detect_structure(ws):
             header_row = 1
             emp_col = 1
 
+    # Detect prenom_col (first name column) if separate from emp_col (last name)
+    prenom_col = None
+    if header_row is not None:
+        for c in range(1, max_c + 1):
+            val = ws.cell(row=header_row, column=c).value
+            if val is not None:
+                val_norm = normalize_str(val)
+                if "prenom" in val_norm:
+                    prenom_col = c
+                    break
+        
+        if prenom_col is not None and emp_col == prenom_col:
+            found_other = False
+            for c in range(1, max_c + 1):
+                if c == prenom_col:
+                    continue
+                val = ws.cell(row=header_row, column=c).value
+                if val is not None:
+                    val_norm = normalize_str(val)
+                    if any(k in val_norm for k in ["nom", "name", "employe", "employee", "collaborateur", "agent", "salarie"]):
+                        emp_col = c
+                        found_other = True
+                        break
+            if not found_other:
+                prenom_col = None
+
     # Find employee rows and summary rows
     emp_rows = []
     total_rows = []
@@ -149,6 +224,9 @@ def detect_structure(ws):
     existing_total_col = None
 
     for c in range(emp_col + 1, ws.max_column + 1):
+        if prenom_col is not None and c == prenom_col:
+            continue
+
         header_val = ws.cell(row=header_row, column=c).value
         header_norm = normalize_str(header_val)
         
@@ -179,7 +257,8 @@ def detect_structure(ws):
             
         sum_cols.append(c)
 
-    return header_row, emp_col, emp_rows, total_rows, sum_cols, existing_total_col
+    return header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col
+
 
 def process_workbook_in_place(file_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
@@ -187,7 +266,7 @@ def process_workbook_in_place(file_bytes):
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         
-        header_row, emp_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
+        header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
         
         if not emp_rows or not sum_cols:
             continue
@@ -196,8 +275,10 @@ def process_workbook_in_place(file_bytes):
         name_counts = {}
         for r in emp_rows:
             val = ws.cell(row=r, column=emp_col).value
-            if val is not None:
-                name_counts[val] = name_counts.get(val, 0) + 1
+            p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+            key = (str(val).strip() if val is not None else "", str(p_val).strip() if p_val is not None else "")
+            if key[0] or key[1]:
+                name_counts[key] = name_counts.get(key, 0) + 1
                 
         is_list_layout = False
         if len(emp_rows) > 0:
@@ -211,16 +292,19 @@ def process_workbook_in_place(file_bytes):
             emp_to_rows = {}
             for r in emp_rows:
                 val = ws.cell(row=r, column=emp_col).value
-                if val is not None:
-                    nom_str = str(val).strip()
-                    if nom_str not in emp_to_rows:
-                        unique_emps.append(nom_str)
-                        emp_to_rows[nom_str] = []
-                    emp_to_rows[nom_str].append(r)
+                p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                if val is not None or p_val is not None:
+                    nom_str = str(val).strip() if val is not None else ""
+                    prenom_str = str(p_val).strip() if p_val is not None else ""
+                    key = (nom_str, prenom_str)
+                    if key not in emp_to_rows:
+                        unique_emps.append(key)
+                        emp_to_rows[key] = []
+                    emp_to_rows[key].append(r)
             
             rows_to_delete = []
-            for emp_name in unique_emps:
-                rows = emp_to_rows[emp_name]
+            for key in unique_emps:
+                rows = emp_to_rows[key]
                 target_row = rows[0]
                 
                 # Sum daily columns
@@ -250,13 +334,13 @@ def process_workbook_in_place(file_bytes):
                 ws.delete_rows(r)
                 
             # Re-detect structure on the collapsed sheet
-            header_row, emp_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
+            header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
             if not emp_rows or not sum_cols:
                 continue
 
         # Find all existing total columns
         total_cols = []
-        for c in range(emp_col + 1, ws.max_column + 1):
+        for c in range(max(emp_col, prenom_col or 0) + 1, ws.max_column + 1):
             header_val = ws.cell(row=header_row, column=c).value
             header_norm = normalize_str(header_val)
             if header_norm in {"total", "somme", "sum", "totaux"}:
@@ -310,14 +394,15 @@ def lire_excel_dynamique(file_bytes):
     
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        header_row, emp_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
+        header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
         if emp_rows and sum_cols:
-            # Determine if List Layout (Layout B)
             name_counts = {}
             for r in emp_rows:
                 val = ws.cell(row=r, column=emp_col).value
-                if val is not None:
-                    name_counts[val] = name_counts.get(val, 0) + 1
+                p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                key = (str(val).strip() if val is not None else "", str(p_val).strip() if p_val is not None else "")
+                if key[0] or key[1]:
+                    name_counts[key] = name_counts.get(key, 0) + 1
                     
             is_list_layout = False
             if len(emp_rows) > 0:
@@ -326,7 +411,6 @@ def lire_excel_dynamique(file_bytes):
                     is_list_layout = True
                     
             if not is_list_layout:
-                # Pivot Layout (Layout A)
                 dates = []
                 for c in sum_cols:
                     hdr_val = ws.cell(row=header_row, column=c).value
@@ -336,12 +420,17 @@ def lire_excel_dynamique(file_bytes):
                 data = {}
                 for r in emp_rows:
                     nom = ws.cell(row=r, column=emp_col).value
-                    if nom is None:
+                    prenom = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                    if nom is None and prenom is None:
                         continue
-                    nom_str = str(nom).strip()
-                    if nom_str not in data:
-                        employees.append(nom_str)
-                        data[nom_str] = []
+                    
+                    nom_formatted = format_employee_name(prenom, nom)
+                    if not nom_formatted:
+                        continue
+                        
+                    if nom_formatted not in data:
+                        employees.append(nom_formatted)
+                        data[nom_formatted] = []
                     
                     vals = []
                     for c in sum_cols:
@@ -350,33 +439,35 @@ def lire_excel_dynamique(file_bytes):
                             vals.append(int(v) if v is not None else 0)
                         except:
                             vals.append(0)
-                    data[nom_str] = vals
+                    data[nom_formatted] = vals
                 return employees, dates, data
             else:
-                # List Layout (Layout B)
-                # Aggregate values per employee
                 dates = []
                 for c in sum_cols:
                     hdr_val = ws.cell(row=header_row, column=c).value
                     dates.append(str(hdr_val) if hdr_val is not None else "")
                     
-                employees_map = {} # nom_str -> list of sums for each sum_col
+                employees_map = {}
                 for r in emp_rows:
                     nom = ws.cell(row=r, column=emp_col).value
-                    if nom is None:
+                    prenom = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                    if nom is None and prenom is None:
                         continue
-                    nom_str = str(nom).strip()
-                    if nom_str not in employees_map:
-                        employees_map[nom_str] = [0] * len(sum_cols)
+                        
+                    nom_formatted = format_employee_name(prenom, nom)
+                    if not nom_formatted:
+                        continue
+                        
+                    if nom_formatted not in employees_map:
+                        employees_map[nom_formatted] = [0] * len(sum_cols)
                         
                     for idx, c in enumerate(sum_cols):
                         v = ws.cell(row=r, column=c).value
                         try:
-                            employees_map[nom_str][idx] += int(v) if v is not None else 0
+                            employees_map[nom_formatted][idx] += int(v) if v is not None else 0
                         except:
                             pass
                             
-                # Sort unique employees
                 employees = list(employees_map.keys())
                 return employees, dates, employees_map
                 
@@ -567,7 +658,7 @@ def labels():
         # Process each sheet
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
-            header_row, emp_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
+            header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
             if not emp_rows or not sum_cols:
                 continue
                 
@@ -575,8 +666,10 @@ def labels():
             name_counts = {}
             for r in emp_rows:
                 val = ws.cell(row=r, column=emp_col).value
-                if val is not None:
-                    name_counts[val] = name_counts.get(val, 0) + 1
+                p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                key = (str(val).strip() if val is not None else "", str(p_val).strip() if p_val is not None else "")
+                if key[0] or key[1]:
+                    name_counts[key] = name_counts.get(key, 0) + 1
                     
             is_list_layout = False
             if len(emp_rows) > 0:
@@ -600,12 +693,17 @@ def labels():
                 # Pivot layout (Layout A)
                 for r in emp_rows:
                     nom = ws.cell(row=r, column=emp_col).value
-                    if nom is None:
+                    prenom = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                    if nom is None and prenom is None:
                         continue
-                    nom_str = str(nom).strip()
-                    if nom_str not in sheet_data:
-                        sheet_employees.append(nom_str)
-                        sheet_data[nom_str] = []
+                    
+                    nom_formatted = format_employee_name(prenom, nom)
+                    if not nom_formatted:
+                        continue
+                        
+                    if nom_formatted not in sheet_data:
+                        sheet_employees.append(nom_formatted)
+                        sheet_data[nom_formatted] = []
                     
                     vals = []
                     for c in sum_cols:
@@ -614,22 +712,27 @@ def labels():
                             vals.append(int(v) if v is not None else 0)
                         except:
                             vals.append(0)
-                    sheet_data[nom_str] = vals
+                    sheet_data[nom_formatted] = vals
             else:
                 # List layout (Layout B)
                 for r in emp_rows:
                     nom = ws.cell(row=r, column=emp_col).value
-                    if nom is None:
+                    prenom = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                    if nom is None and prenom is None:
                         continue
-                    nom_str = str(nom).strip()
-                    if nom_str not in sheet_data:
-                        sheet_employees.append(nom_str)
-                        sheet_data[nom_str] = [0] * len(sum_cols)
+                        
+                    nom_formatted = format_employee_name(prenom, nom)
+                    if not nom_formatted:
+                        continue
+                        
+                    if nom_formatted not in sheet_data:
+                        sheet_employees.append(nom_formatted)
+                        sheet_data[nom_formatted] = [0] * len(sum_cols)
                         
                     for idx, c in enumerate(sum_cols):
                         v = ws.cell(row=r, column=c).value
                         try:
-                            sheet_data[nom_str][idx] += int(v) if v is not None else 0
+                            sheet_data[nom_formatted][idx] += int(v) if v is not None else 0
                         except:
                             pass
                             
