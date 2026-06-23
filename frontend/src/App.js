@@ -14,7 +14,7 @@ function App() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [status, setStatus] = useState({
     type: '',
-    message: 'Format attendu : colonne A = noms, colonnes suivantes = dates, valeurs 0 ou 1.'
+    message: 'Sélectionnez un fichier Excel pour calculer automatiquement le total par employé.'
   });
 
   const canDownload = Boolean(file) && !isDownloading;
@@ -36,7 +36,7 @@ function App() {
     setFile(null);
     setStatus({
       type: '',
-      message: 'Format attendu : colonne A = noms, colonnes suivantes = dates, valeurs 0 ou 1.'
+      message: 'Sélectionnez un fichier Excel pour calculer automatiquement le total par employé.'
     });
   }
 
@@ -88,9 +88,9 @@ function App() {
         <section className="workspace" aria-label="Génération de rapport lait">
           <div className="intro">
             <div className="eyebrow">Rapport automatique</div>
-            <h1>Importer un fichier lait.</h1>
+            <h1>Importer un fichier Excel.</h1>
             <p>
-              Ajoutez le fichier Excel source, puis téléchargez directement le rapport généré.
+              Ajoutez votre fichier Excel de suivi, puis téléchargez le même fichier enrichi d'une colonne de total pour chaque employé.
             </p>
           </div>
 
