@@ -444,7 +444,7 @@ def extraire_mois_annee(ws, dates):
     now = datetime.now()
     return f"{MONTH_NAMES[now.month]} {now.year}"
 
-def generer_etiquettes_pdf(employees_data, period):
+def generer_etiquettes_pdf(employees_data):
     # A4 Dimensions: 595.27 x 841.89 points
     page_width, page_height = A4
     
@@ -496,6 +496,7 @@ def generer_etiquettes_pdf(employees_data, period):
         c.line(x + 10, y + label_height - 20, x + label_width - 10, y + label_height - 20)
         
         # Draw "LaitTrack • [Period]" tiny brand label
+        period = emp.get("period", "Étiquette")
         c.setFillColor(secondary_color)
         c.setFont("Helvetica-Bold", 7)
         c.drawString(x + 12, y + label_height - 14, f"LaitTrack • {period}")
@@ -557,27 +558,97 @@ def labels():
     f = request.files["file"]
     try:
         file_bytes = f.read()
-        employees, dates, data = lire_excel_dynamique(file_bytes)
         
-        # Open workbook to extract month/year
+        # Load workbook
         wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        period = extraire_mois_annee(ws, dates)
         
-        # Construct list of dicts: {"nom": emp, "total": total}
-        employees_data = []
-        for emp in employees:
-            vals = data[emp]
-            total = sum(vals)
-            employees_data.append({
-                "nom": emp,
-                "total": total
-            })
+        labels_data = []
+        
+        # Process each sheet
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            header_row, emp_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
+            if not emp_rows or not sum_cols:
+                continue
+                
+            # Determine if List Layout (Layout B)
+            name_counts = {}
+            for r in emp_rows:
+                val = ws.cell(row=r, column=emp_col).value
+                if val is not None:
+                    name_counts[val] = name_counts.get(val, 0) + 1
+                    
+            is_list_layout = False
+            if len(emp_rows) > 0:
+                max_occ = max(name_counts.values()) if name_counts else 0
+                if max_occ > 1:
+                    is_list_layout = True
             
-        # Sort alphabetically
-        employees_data.sort(key=lambda x: x["nom"])
+            dates = []
+            for c in sum_cols:
+                hdr_val = ws.cell(row=header_row, column=c).value
+                dates.append(str(hdr_val) if hdr_val is not None else "")
+                
+            # Extract period (month/year) for this sheet
+            period = extraire_mois_annee(ws, dates)
+            
+            # Aggregate employees for this sheet
+            sheet_employees = []
+            sheet_data = {}
+            
+            if not is_list_layout:
+                # Pivot layout (Layout A)
+                for r in emp_rows:
+                    nom = ws.cell(row=r, column=emp_col).value
+                    if nom is None:
+                        continue
+                    nom_str = str(nom).strip()
+                    if nom_str not in sheet_data:
+                        sheet_employees.append(nom_str)
+                        sheet_data[nom_str] = []
+                    
+                    vals = []
+                    for c in sum_cols:
+                        v = ws.cell(row=r, column=c).value
+                        try:
+                            vals.append(int(v) if v is not None else 0)
+                        except:
+                            vals.append(0)
+                    sheet_data[nom_str] = vals
+            else:
+                # List layout (Layout B)
+                for r in emp_rows:
+                    nom = ws.cell(row=r, column=emp_col).value
+                    if nom is None:
+                        continue
+                    nom_str = str(nom).strip()
+                    if nom_str not in sheet_data:
+                        sheet_employees.append(nom_str)
+                        sheet_data[nom_str] = [0] * len(sum_cols)
+                        
+                    for idx, c in enumerate(sum_cols):
+                        v = ws.cell(row=r, column=c).value
+                        try:
+                            sheet_data[nom_str][idx] += int(v) if v is not None else 0
+                        except:
+                            pass
+                            
+            # Add to labels_data
+            for emp in sheet_employees:
+                total = sum(sheet_data[emp])
+                labels_data.append({
+                    "nom": emp,
+                    "total": total,
+                    "period": period
+                })
+                
+        if not labels_data:
+            return jsonify({"error": "Aucune donnée d'employé trouvée dans le fichier Excel."}), 400
+            
+        # Sort labels by period, then by employee name
+        labels_data.sort(key=lambda x: (x["period"], x["nom"]))
         
-        pdf_bytes = generer_etiquettes_pdf(employees_data, period)
+        pdf_bytes = generer_etiquettes_pdf(labels_data)
         
         return send_file(
             io.BytesIO(pdf_bytes),
