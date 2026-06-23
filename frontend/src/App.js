@@ -12,12 +12,14 @@ function App() {
   const [file, setFile] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloadingLabels, setIsDownloadingLabels] = useState(false);
   const [status, setStatus] = useState({
     type: '',
     message: 'Sélectionnez un fichier Excel pour calculer automatiquement le total par employé.'
   });
 
-  const canDownload = Boolean(file) && !isDownloading;
+  const canDownload = Boolean(file) && !isDownloading && !isDownloadingLabels;
+  const canDownloadLabels = Boolean(file) && !isDownloading && !isDownloadingLabels;
 
   function selectFile(nextFile) {
     if (!nextFile) return;
@@ -71,6 +73,40 @@ function App() {
       setStatus({ type: 'error', message: error.message });
     } finally {
       setIsDownloading(false);
+    }
+  }
+
+  async function downloadLabels() {
+    if (!canDownloadLabels) return;
+
+    setIsDownloadingLabels(true);
+    setStatus({ type: '', message: 'Génération des étiquettes en cours...' });
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch(`${API}/labels`, { method: 'POST', body: formData });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || 'Erreur lors de la génération des étiquettes.');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `etiquettes_lait_${Date.now()}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      setStatus({ type: 'success', message: 'Étiquettes téléchargées avec succès.' });
+    } catch (error) {
+      setStatus({ type: 'error', message: error.message });
+    } finally {
+      setIsDownloadingLabels(false);
     }
   }
 
@@ -136,6 +172,10 @@ function App() {
               <button className="btn btn-primary" type="button" disabled={!canDownload} onClick={downloadReport}>
                 {isDownloading && <span className="spinner" aria-hidden="true" />}
                 {isDownloading ? 'Génération...' : 'Télécharger le rapport'}
+              </button>
+              <button className="btn btn-secondary" type="button" disabled={!canDownloadLabels} onClick={downloadLabels}>
+                {isDownloadingLabels && <span className="spinner" aria-hidden="true" />}
+                {isDownloadingLabels ? 'Génération PDF...' : 'Télécharger les étiquettes (PDF)'}
               </button>
             </div>
 
