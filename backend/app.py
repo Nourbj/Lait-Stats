@@ -1,6 +1,9 @@
+# -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import openpyxl
+from openpyxl.cell.cell import MergedCell
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 import io
 from datetime import datetime
@@ -11,11 +14,13 @@ from reportlab.lib.colors import HexColor
 from reportlab.pdfgen import canvas
 import re
 import csv
+import traceback
+import os
 
 app = Flask(__name__)
 CORS(app)
 
-# ── helpers ────────────────────────────────────────────────────────────────
+# â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def normalize_str(s):
     if s is None:
         return ""
@@ -46,7 +51,7 @@ def parse_csv_to_rows(file_bytes):
         except UnicodeDecodeError:
             continue
     if text is None:
-        raise ValueError("Impossible de décoder le fichier CSV.")
+        raise ValueError("Impossible de dÃ©coder le fichier CSV.")
     
     first_line = text.split('\n')[0] if text else ""
     delimiter = ','
@@ -79,7 +84,40 @@ def load_workbook_from_bytes(file_bytes, data_only=False):
                     ws.cell(row=r_idx, column=c_idx, value="")
         return wb
     else:
-        return openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=data_only)
+        # Try to load as an openpyxl workbook (xlsx). If that fails (e.g. old .xls
+        # BIFF format), fall back to pandas which can read legacy Excel files
+        # and then convert the DataFrame(s) into an openpyxl Workbook.
+        try:
+            return openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=data_only)
+        except Exception as e:
+            try:
+                import pandas as _pd
+                # read all sheets
+                xls = _pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+            except Exception:
+                # re-raise original exception for clarity
+                raise e
+
+            wb = openpyxl.Workbook()
+            first = True
+            for sheet_name, df in xls.items():
+                if first:
+                    ws = wb.active
+                    ws.title = str(sheet_name)[:31]
+                    first = False
+                else:
+                    ws = wb.create_sheet(title=str(sheet_name)[:31])
+
+                # write header
+                for c_idx, col in enumerate(df.columns, 1):
+                    ws.cell(row=1, column=c_idx, value=str(col))
+
+                # write data rows
+                for r_idx, row in enumerate(df.itertuples(index=False, name=None), 2):
+                    for c_idx, val in enumerate(row, 1):
+                        ws.cell(row=r_idx, column=c_idx, value=val)
+
+            return wb
 
 def format_single_name(name_str):
     if not name_str:
@@ -137,6 +175,134 @@ def copy_style(src_cell, dst_cell):
         dst_cell.border = copy(src_cell.border)
         dst_cell.alignment = copy(src_cell.alignment)
         dst_cell.number_format = copy(src_cell.number_format)
+
+def numeric_value(value):
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        value_str = value.strip().replace(',', '.')
+        if not value_str:
+            return 0
+        try:
+            return float(value_str)
+        except ValueError:
+            return 0
+    return 0
+
+def find_header_columns(ws, header_row):
+    columns = {}
+    for c in range(1, ws.max_column + 1):
+        header_norm = normalize_str(ws.cell(row=header_row, column=c).value)
+        if header_norm:
+            columns[header_norm] = c
+    return columns
+
+def find_column_by_header(ws, header_row, accepted_headers):
+    accepted = {normalize_str(h) for h in accepted_headers}
+    for c in range(1, ws.max_column + 1):
+        header_norm = normalize_str(ws.cell(row=header_row, column=c).value)
+        if header_norm in accepted:
+            return c
+    return None
+
+def get_or_create_quantite_column(ws, header_row, after_col):
+    quantite_col = find_column_by_header(ws, header_row, {'quantite', 'quantity', 'qty'})
+    if quantite_col:
+        return quantite_col
+
+    quantite_col = after_col + 1
+    ws.insert_cols(quantite_col)
+    header_cell = ws.cell(row=header_row, column=quantite_col, value='Quantité')
+    copy_style(ws.cell(row=header_row, column=after_col), header_cell)
+    header_cell.font = Font(bold=True, size=24)
+    header_cell.alignment = Alignment(horizontal='center', vertical='center')
+    ws.column_dimensions[get_column_letter(quantite_col)].width = 18
+    return quantite_col
+
+def employee_key_for_row(ws, row, identity_cols):
+    values = []
+    for col in identity_cols:
+        value = ws.cell(row=row, column=col).value
+        values.append(str(value).strip() if value is not None else '')
+    return tuple(values)
+
+def process_attendance_quantity_sheet(ws, header_row, emp_rows):
+    presence_col = find_column_by_header(ws, header_row, {'presence'})
+    if not presence_col:
+        return False
+
+    header_cols = find_header_columns(ws, header_row)
+    identity_cols = []
+    for header in ('emp no.', 'emp no', 'matricule.', 'matricule', 'prenom.', 'prenom', 'nom.', 'nom'):
+        col = header_cols.get(normalize_str(header))
+        if col and col not in identity_cols:
+            identity_cols.append(col)
+
+    if not identity_cols:
+        return False
+
+    quantite_col = get_or_create_quantite_column(ws, header_row, presence_col)
+
+    for merged_range in list(ws.merged_cells.ranges):
+        if (
+            merged_range.min_col == quantite_col
+            and merged_range.max_col == quantite_col
+            and merged_range.min_row > header_row
+        ):
+            try:
+                ws.unmerge_cells(str(merged_range))
+            except KeyError:
+                try:
+                    ws.merged_cells.ranges.remove(merged_range)
+                except KeyError:
+                    pass
+                for row in range(merged_range.min_row, merged_range.max_row + 1):
+                    for col in range(merged_range.min_col, merged_range.max_col + 1):
+                        if row == merged_range.min_row and col == merged_range.min_col:
+                            continue
+                        if isinstance(ws._cells.get((row, col)), MergedCell):
+                            del ws._cells[(row, col)]
+
+    current_key = None
+    current_rows = []
+    groups = []
+    for row in emp_rows:
+        key = employee_key_for_row(ws, row, identity_cols)
+        if not any(key):
+            continue
+        if current_key is None or key == current_key:
+            current_key = key
+            current_rows.append(row)
+        else:
+            groups.append(current_rows)
+            current_key = key
+            current_rows = [row]
+    if current_rows:
+        groups.append(current_rows)
+
+    for rows in groups:
+        total = sum(numeric_value(ws.cell(row=row, column=presence_col).value) for row in rows)
+        first_row = rows[0]
+        last_row = rows[-1]
+
+        for row in rows:
+            cell = ws.cell(row=row, column=quantite_col)
+            cell.value = None
+            copy_style(ws.cell(row=row, column=presence_col), cell)
+
+        quantity_cell = ws.cell(row=first_row, column=quantite_col, value=int(total) if total == int(total) else total)
+        copy_style(ws.cell(row=first_row, column=presence_col), quantity_cell)
+        quantity_cell.font = Font(bold=True, size=22)
+        quantity_cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        if last_row > first_row:
+            ws.merge_cells(start_row=first_row, start_column=quantite_col, end_row=last_row, end_column=quantite_col)
+
+    return True
 
 def detect_structure(ws):
     EMPLOYEE_KEYWORDS = {
@@ -320,6 +486,9 @@ def process_workbook_in_place(wb):
         
         if not emp_rows or not sum_cols:
             continue
+
+        if process_attendance_quantity_sheet(ws, header_row, emp_rows):
+            continue
             
         # Determine layout type
         name_counts = {}
@@ -341,8 +510,8 @@ def process_workbook_in_place(wb):
             unique_emps = []
             emp_to_rows = {}
             for r in emp_rows:
-                val = ws.cell(row=r, column=emp_col).value
-                p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                val = ws.cell(row=r, column=nom_col).value
+                p_val = ws.cell(row=r, column=first_name_col).value if first_name_col is not None else None
                 if val is not None or p_val is not None:
                     nom_str = str(val).strip() if val is not None else ""
                     prenom_str = str(p_val).strip() if p_val is not None else ""
@@ -446,8 +615,8 @@ def lire_excel_dynamique(file_bytes):
         if emp_rows and sum_cols:
             name_counts = {}
             for r in emp_rows:
-                val = ws.cell(row=r, column=emp_col).value
-                p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
+                val = ws.cell(row=r, column=nom_col).value
+                p_val = ws.cell(row=r, column=first_name_col).value if first_name_col is not None else None
                 key = (str(val).strip() if val is not None else "", str(p_val).strip() if p_val is not None else "")
                 if key[0] or key[1]:
                     name_counts[key] = name_counts.get(key, 0) + 1
@@ -522,8 +691,8 @@ def lire_excel_dynamique(file_bytes):
     return [], [], {}
 
 MONTH_NAMES = {
-    1: "Janvier", 2: "Février", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
-    7: "Juillet", 8: "Août", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "Décembre"
+    1: "Janvier", 2: "FÃ©vrier", 3: "Mars", 4: "Avril", 5: "Mai", 6: "Juin",
+    7: "Juillet", 8: "AoÃ»t", 9: "Septembre", 10: "Octobre", 11: "Novembre", 12: "DÃ©cembre"
 }
 
 def extraire_mois_annee(ws, dates):
@@ -583,239 +752,215 @@ def extraire_mois_annee(ws, dates):
     now = datetime.now()
     return f"{MONTH_NAMES[now.month]} {now.year}"
 
+MILK_UNIT_PRICE = 1350
+
+
+def format_label_name(prenom_val, nom_val):
+    nom = str(nom_val).strip() if nom_val is not None else ''
+    prenom = str(prenom_val).strip() if prenom_val is not None else ''
+    if nom and prenom:
+        return f"{nom} {prenom}"
+    if nom:
+        return format_single_name(nom)
+    if prenom:
+        return format_single_name(prenom)
+    return ''
+
+
+def label_name_columns(ws, header_row, emp_col, prenom_col):
+    nom_col = None
+    first_name_col = None
+
+    for c in range(1, ws.max_column + 1):
+        header_norm = normalize_str(ws.cell(row=header_row, column=c).value)
+        if header_norm in {'nom', 'nom.'}:
+            nom_col = c
+        elif header_norm in {'prenom', 'prenom.'} or (header_norm.startswith('pr') and 'nom' in header_norm):
+            first_name_col = c
+
+    return nom_col or emp_col, first_name_col or prenom_col
+
+
+def label_name_for_row(ws, row, nom_col, prenom_col):
+    nom = ws.cell(row=row, column=nom_col).value if nom_col is not None else None
+    prenom = ws.cell(row=row, column=prenom_col).value if prenom_col is not None else None
+    return format_label_name(prenom, nom)
+
+def employee_label_key(ws, row, header_row, emp_col, prenom_col):
+    matricule_col = find_column_by_header(ws, header_row, {'matricule', 'matricule.'})
+    emp_no_col = find_column_by_header(ws, header_row, {'emp no', 'emp no.'})
+    if matricule_col:
+        value = ws.cell(row=row, column=matricule_col).value
+        if value is not None and str(value).strip():
+            return ('matricule', str(value).strip())
+    if emp_no_col:
+        value = ws.cell(row=row, column=emp_no_col).value
+        if value is not None and str(value).strip():
+            return ('emp_no', str(value).strip())
+
+    nom_col, first_name_col = label_name_columns(ws, header_row, emp_col, prenom_col)
+    return ('name', normalize_str(label_name_for_row(ws, row, nom_col, first_name_col)))
+
+
+def add_label_total(labels_map, order, key, name, amount):
+    if not name or amount == 0:
+        return
+    if key not in labels_map:
+        order.append(key)
+        labels_map[key] = {'nom': name, 'total': 0}
+    labels_map[key]['total'] += amount
+
+
 def generer_etiquettes_pdf(employees_data):
-    # A4 Dimensions: 595.27 x 841.89 points
     page_width, page_height = A4
-    
-    # Grid configuration (3 columns, 7 rows)
-    cols = 3
-    rows = 7
-    labels_per_page = cols * rows
-    
-    # Dimensions in points
-    label_width = 178
-    label_height = 104
-    col_gap = 10
-    row_gap = 10
-    
-    # Calculate margins to center the grid
-    margin_x = (page_width - (cols * label_width + (cols - 1) * col_gap)) / 2.0
-    margin_y = (page_height - (rows * label_height + (rows - 1) * row_gap)) / 2.0
-    
+    cols = 2
+    rows = 4
+    receipts_per_page = cols * rows
+    margin_x = 14
+    margin_y = 18
+    receipt_width = (page_width - margin_x * 2) / cols
+    receipt_height = (page_height - margin_y * 2) / rows
+
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
-    
-    # Palette colors (LaitTrack aesthetic: teal primary, light teal/slate background)
-    primary_color = HexColor("#0c9f9a")      # Teal
-    secondary_color = HexColor("#087b77")    # Dark teal
-    border_color = HexColor("#d8e3e7")       # Light grey/blue border
-    text_dark = HexColor("#172026")          # Dark text
-    badge_bg = HexColor("#eef8f7")           # Soft teal badge background
-    
+    border_color = HexColor('#bfbfbf')
+    text_color = HexColor('#111111')
+
+    def fit_bold_text(text, max_width, start_size=12, min_size=8):
+        size = start_size
+        while c.stringWidth(text, 'Helvetica-Bold', size) > max_width and size > min_size:
+            size -= 0.5
+        return size
+
     for index, emp in enumerate(employees_data):
-        page_idx = index % labels_per_page
-        
-        # Calculate row and col (0-indexed)
+        page_idx = index % receipts_per_page
         col_idx = page_idx % cols
-        row_idx = page_idx // cols  # 0 to 6
-        
-        # X and Y positions
-        x = margin_x + col_idx * (label_width + col_gap)
-        y = page_height - margin_y - (row_idx + 1) * label_height - row_idx * row_gap
-        
-        # 1. Draw rounded rectangle border
+        row_idx = page_idx // cols
+        x = margin_x + col_idx * receipt_width
+        y = page_height - margin_y - (row_idx + 1) * receipt_height
+
         c.setStrokeColor(border_color)
-        c.setLineWidth(1)
-        c.setFillColor(HexColor("#ffffff"))
-        c.roundRect(x, y, label_width, label_height, 6, fill=True, stroke=True)
-        
-        # 2. Draw card header accent (top border line or minor logo/title)
-        c.setStrokeColor(HexColor("#e6f2f1"))
-        c.setLineWidth(0.5)
-        c.line(x + 10, y + label_height - 20, x + label_width - 10, y + label_height - 20)
-        
-        # Draw "[Period]" tiny brand label
-        period = emp.get("period", "Étiquette")
-        c.setFillColor(secondary_color)
-        c.setFont("Helvetica-Bold", 7)
-        c.drawString(x + 12, y + label_height - 14, period)
-        
-        # 3. Draw Employee Name
-        name = emp["nom"]
-        
-        # Set initial font size
-        font_size = 13
-        c.setFont("Helvetica-Bold", font_size)
-        
-        # Adjust font size dynamically based on name length
-        name_width = c.stringWidth(name, "Helvetica-Bold", font_size)
-        max_name_width = label_width - 24
-        while name_width > max_name_width and font_size > 8:
-            font_size -= 0.5
-            name_width = c.stringWidth(name, "Helvetica-Bold", font_size)
-            
-        c.setFont("Helvetica-Bold", font_size)
-        c.setFillColor(text_dark)
-        # Center the name horizontally
-        name_x = x + (label_width - name_width) / 2.0
-        # Vertically, center it
-        c.drawString(name_x, y + label_height / 2.0 + 2, name)
-        
-        # 4. Draw stylized total badge
-        badge_w = 120
-        badge_h = 22
-        badge_x = x + (label_width - badge_w) / 2.0
-        badge_y = y + 14
-        
-        c.setFillColor(badge_bg)
-        c.setStrokeColor(HexColor("#bce2e0"))
         c.setLineWidth(0.75)
-        c.roundRect(badge_x, badge_y, badge_w, badge_h, 4, fill=True, stroke=True)
-        
-        # Text inside badge
-        total_text = f"{emp['total']} paquets"
-        c.setFillColor(primary_color)
-        c.setFont("Helvetica-Bold", 10)
-        text_w = c.stringWidth(total_text, "Helvetica-Bold", 10)
-        text_x = badge_x + (badge_w - text_w) / 2.0
-        text_y = badge_y + (badge_h - 10) / 2.0 + 1.5
-        c.drawString(text_x, text_y, total_text)
-        
-        # If we reached the end of the page and there are more elements, start a new page
-        if page_idx == labels_per_page - 1 and index < len(employees_data) - 1:
+        c.rect(x, y, receipt_width, receipt_height, stroke=True, fill=False)
+
+        title = 'Reçu de partage de lait'
+        c.setFillColor(text_color)
+        c.setFont('Helvetica-Bold', 16)
+        c.drawCentredString(x + receipt_width / 2, y + receipt_height - 24, title)
+
+        left = x + 8
+        line_y = y + receipt_height - 58
+        name = emp['nom']
+        total = int(emp['total']) if emp['total'] == int(emp['total']) else emp['total']
+        value = int(total * MILK_UNIT_PRICE)
+
+        rows_text = [
+            f"Code :{index + 1}",
+            f"Nom &Prénom :{name}",
+            f"Quantité : {total}",
+            f"Valeur financière : {value}",
+        ]
+
+        for text_line in rows_text:
+            font_size = fit_bold_text(text_line, receipt_width - 18, start_size=12, min_size=8)
+            if text_line.startswith('Valeur'):
+                font_size = fit_bold_text(text_line, receipt_width - 18, start_size=13, min_size=9)
+            c.setFont('Helvetica-Bold', font_size)
+            c.drawString(left, line_y, text_line)
+            line_y -= 32
+
+        if page_idx == receipts_per_page - 1 and index < len(employees_data) - 1:
             c.showPage()
-            
+
     c.save()
     buffer.seek(0)
     return buffer.getvalue()
 
 @app.route("/api/labels", methods=["POST"])
 def labels():
-    """Génère et retourne le PDF des étiquettes."""
+    """Génère et retourne le PDF des reçus cumulés par employé."""
     if "file" not in request.files:
         return jsonify({"error": "Aucun fichier reçu"}), 400
     f = request.files["file"]
     try:
         file_bytes = f.read()
-        
-        # Load workbook
         wb = load_workbook_from_bytes(file_bytes, data_only=True)
-        
-        labels_data = []
-        
-        # Process each sheet
+
+        labels_map = {}
+        order = []
+
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col = detect_structure(ws)
-            if not emp_rows or not sum_cols:
+            if not emp_rows:
                 continue
-                
-            # Determine if List Layout (Layout B)
+
+            nom_col, first_name_col = label_name_columns(ws, header_row, emp_col, prenom_col)
+
+            presence_col = find_column_by_header(ws, header_row, {'presence'})
+            if presence_col:
+                for r in emp_rows:
+                    name = label_name_for_row(ws, r, nom_col, first_name_col)
+                    key = employee_label_key(ws, r, header_row, emp_col, prenom_col)
+                    add_label_total(labels_map, order, key, name, numeric_value(ws.cell(row=r, column=presence_col).value))
+                continue
+
+            if not sum_cols:
+                continue
+
             name_counts = {}
             for r in emp_rows:
-                val = ws.cell(row=r, column=emp_col).value
-                p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
-                key = (str(val).strip() if val is not None else "", str(p_val).strip() if p_val is not None else "")
+                val = ws.cell(row=r, column=nom_col).value
+                p_val = ws.cell(row=r, column=first_name_col).value if first_name_col is not None else None
+                key = (str(val).strip() if val is not None else '', str(p_val).strip() if p_val is not None else '')
                 if key[0] or key[1]:
                     name_counts[key] = name_counts.get(key, 0) + 1
-                    
-            is_list_layout = False
-            if len(emp_rows) > 0:
-                max_occ = max(name_counts.values()) if name_counts else 0
-                if max_occ > 1:
-                    is_list_layout = True
-            
-            dates = []
-            for c in sum_cols:
-                hdr_val = ws.cell(row=header_row, column=c).value
-                dates.append(str(hdr_val) if hdr_val is not None else "")
-                
-            # Extract period (month/year) for this sheet
-            period = extraire_mois_annee(ws, dates)
-            
-            # Aggregate employees for this sheet
-            sheet_employees = []
-            sheet_data = {}
-            
-            if not is_list_layout:
-                # Pivot layout (Layout A)
+
+            is_list_layout = bool(name_counts and max(name_counts.values()) > 1)
+
+            if is_list_layout:
                 for r in emp_rows:
-                    nom = ws.cell(row=r, column=emp_col).value
-                    prenom = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
-                    if nom is None and prenom is None:
-                        continue
-                    
-                    nom_formatted = format_employee_name(prenom, nom)
-                    if not nom_formatted:
-                        continue
-                        
-                    if nom_formatted not in sheet_data:
-                        sheet_employees.append(nom_formatted)
-                        sheet_data[nom_formatted] = []
-                    
-                    vals = []
-                    for c in sum_cols:
-                        v = ws.cell(row=r, column=c).value
-                        try:
-                            vals.append(int(v) if v is not None else 0)
-                        except:
-                            vals.append(0)
-                    sheet_data[nom_formatted] = vals
+                    name = label_name_for_row(ws, r, nom_col, first_name_col)
+                    key = employee_label_key(ws, r, header_row, emp_col, prenom_col)
+                    row_total = sum(numeric_value(ws.cell(row=r, column=c).value) for c in sum_cols)
+                    add_label_total(labels_map, order, key, name, row_total)
             else:
-                # List layout (Layout B)
                 for r in emp_rows:
-                    nom = ws.cell(row=r, column=emp_col).value
-                    prenom = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
-                    if nom is None and prenom is None:
-                        continue
-                        
-                    nom_formatted = format_employee_name(prenom, nom)
-                    if not nom_formatted:
-                        continue
-                        
-                    if nom_formatted not in sheet_data:
-                        sheet_employees.append(nom_formatted)
-                        sheet_data[nom_formatted] = [0] * len(sum_cols)
-                        
-                    for idx, c in enumerate(sum_cols):
-                        v = ws.cell(row=r, column=c).value
-                        try:
-                            sheet_data[nom_formatted][idx] += int(v) if v is not None else 0
-                        except:
-                            pass
-                            
-            # Add to labels_data
-            for emp in sheet_employees:
-                total = sum(sheet_data[emp])
-                labels_data.append({
-                    "nom": emp,
-                    "total": total,
-                    "period": period
-                })
-                
+                    name = label_name_for_row(ws, r, nom_col, first_name_col)
+                    key = employee_label_key(ws, r, header_row, emp_col, prenom_col)
+                    row_total = sum(numeric_value(ws.cell(row=r, column=c).value) for c in sum_cols)
+                    add_label_total(labels_map, order, key, name, row_total)
+
+        labels_data = [labels_map[key] for key in order if labels_map[key]['total'] > 0]
+
         if not labels_data:
             return jsonify({"error": "Aucune donnée d'employé trouvée dans le fichier Excel."}), 400
-            
-        # Sort labels by period, then by employee name
-        labels_data.sort(key=lambda x: (x["period"], x["nom"]))
-        
+
         pdf_bytes = generer_etiquettes_pdf(labels_data)
-        
+
         return send_file(
             io.BytesIO(pdf_bytes),
             mimetype="application/pdf",
             as_attachment=True,
-            download_name=f"etiquettes_lait_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+            download_name=f"recus_lait_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
         )
     except Exception as e:
+        try:
+            log_path = os.path.join(os.path.dirname(__file__), 'error.log')
+            with open(log_path, 'a', encoding='utf-8') as logf:
+                logf.write(f"[{datetime.now().isoformat()}] Exception in labels:\n")
+                logf.write(traceback.format_exc())
+                logf.write('\n')
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 500
 
-# ── Routes API ────────────────────────────────────────────────────────────
+# â”€â”€ Routes API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 @app.route("/api/preview", methods=["POST"])
 def preview():
-    """Upload un fichier, retourne les données JSON pour le dashboard."""
+    """Upload un fichier, retourne les donnÃ©es JSON pour le dashboard."""
     if "file" not in request.files:
-        return jsonify({"error": "Aucun fichier reçu"}), 400
+        return jsonify({"error": "Aucun fichier reÃ§u"}), 400
     f = request.files["file"]
     try:
         file_bytes = f.read()
@@ -847,13 +992,21 @@ def preview():
             "taux_global": round(total_global / (len(employees) * len(dates)) * 100, 1) if employees and dates else 0
         })
     except Exception as e:
+        try:
+            log_path = os.path.join(os.path.dirname(__file__), 'error.log')
+            with open(log_path, 'a', encoding='utf-8') as logf:
+                logf.write(f"[{datetime.now().isoformat()}] Exception in download:\n")
+                logf.write(traceback.format_exc())
+                logf.write('\n')
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/download", methods=["POST"])
 def download():
-    """Génère et retourne le fichier Excel ou CSV rapport."""
+    """GÃ©nÃ¨re et retourne le fichier Excel ou CSV rapport."""
     if "file" not in request.files:
-        return jsonify({"error": "Aucun fichier reçu"}), 400
+        return jsonify({"error": "Aucun fichier reÃ§u"}), 400
     f = request.files["file"]
     try:
         file_bytes = f.read()
@@ -891,6 +1044,14 @@ def download():
                 download_name=f"rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
             )
     except Exception as e:
+        try:
+            log_path = os.path.join(os.path.dirname(__file__), 'error.log')
+            with open(log_path, 'a', encoding='utf-8') as logf:
+                logf.write(f"[{datetime.now().isoformat()}] Exception in labels:\n")
+                logf.write(traceback.format_exc())
+                logf.write('\n')
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 500
 
 

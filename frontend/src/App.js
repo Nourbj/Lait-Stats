@@ -81,7 +81,7 @@ function App() {
     if (!canDownloadLabels) return;
 
     setIsDownloadingLabels(true);
-    setStatus({ type: '', message: 'Génération des étiquettes en cours...' });
+    setStatus({ type: '', message: 'Génération des reçus en cours...' });
 
     const formData = new FormData();
     formData.append('file', file);
@@ -90,20 +90,20 @@ function App() {
       const response = await fetch(`${API}/labels`, { method: 'POST', body: formData });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || 'Erreur lors de la génération des étiquettes.');
+        throw new Error(payload.error || 'Erreur lors de la génération des reçus.');
       }
 
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `etiquettes_lait_${Date.now()}.pdf`;
+      link.download = `recus_lait_${Date.now()}.pdf`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
 
-      setStatus({ type: 'success', message: 'Étiquettes téléchargées avec succès.' });
+      setStatus({ type: 'success', message: 'Reçus téléchargés avec succès.' });
     } catch (error) {
       setStatus({ type: 'error', message: error.message });
     } finally {
@@ -177,7 +177,7 @@ function App() {
               </button>
               <button className="btn btn-secondary" type="button" disabled={!canDownloadLabels} onClick={downloadLabels}>
                 {isDownloadingLabels && <span className="spinner" aria-hidden="true" />}
-                {isDownloadingLabels ? 'Génération PDF...' : 'Télécharger les étiquettes (PDF)'}
+                {isDownloadingLabels ? 'Génération des reçus...' : 'Imprimer les reçus'}
               </button>
             </div>
 
