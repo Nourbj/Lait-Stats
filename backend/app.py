@@ -16,11 +16,11 @@ import re
 import csv
 import traceback
 import os
+import math
 
 app = Flask(__name__)
 CORS(app)
 
-# â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def normalize_str(s):
     if s is None:
         return ""
@@ -115,6 +115,8 @@ def load_workbook_from_bytes(file_bytes, data_only=False):
                 # write data rows
                 for r_idx, row in enumerate(df.itertuples(index=False, name=None), 2):
                     for c_idx, val in enumerate(row, 1):
+                        if isinstance(val, float) and math.isnan(val):
+                            val = None
                         ws.cell(row=r_idx, column=c_idx, value=val)
 
             return wb
@@ -182,6 +184,8 @@ def numeric_value(value):
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, (int, float)):
+        if math.isnan(value):
+            return 0
         return value
     if isinstance(value, str):
         value_str = value.strip().replace(',', '.')
@@ -192,6 +196,21 @@ def numeric_value(value):
         except ValueError:
             return 0
     return 0
+
+def safe_int_or_float(val):
+    if val is None:
+        return 0
+    if isinstance(val, (int, float)):
+        if math.isnan(val) or math.isinf(val):
+            return 0
+        return int(val) if val == int(val) else val
+    try:
+        f_val = float(val)
+        if math.isnan(f_val) or math.isinf(f_val):
+            return 0
+        return int(f_val) if f_val == int(f_val) else f_val
+    except (ValueError, TypeError):
+        return val
 
 def find_header_columns(ws, header_row):
     columns = {}
@@ -294,7 +313,7 @@ def process_attendance_quantity_sheet(ws, header_row, emp_rows):
             cell.value = None
             copy_style(ws.cell(row=row, column=presence_col), cell)
 
-        quantity_cell = ws.cell(row=first_row, column=quantite_col, value=int(total) if total == int(total) else total)
+        quantity_cell = ws.cell(row=first_row, column=quantite_col, value=safe_int_or_float(total))
         copy_style(ws.cell(row=first_row, column=presence_col), quantity_cell)
         quantity_cell.font = Font(bold=True, size=22)
         quantity_cell.alignment = Alignment(horizontal='center', vertical='center')
@@ -510,8 +529,8 @@ def process_workbook_in_place(wb):
             unique_emps = []
             emp_to_rows = {}
             for r in emp_rows:
-                val = ws.cell(row=r, column=nom_col).value
-                p_val = ws.cell(row=r, column=first_name_col).value if first_name_col is not None else None
+                val = ws.cell(row=r, column=emp_col).value
+                p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
                 if val is not None or p_val is not None:
                     nom_str = str(val).strip() if val is not None else ""
                     prenom_str = str(p_val).strip() if p_val is not None else ""
@@ -615,8 +634,8 @@ def lire_excel_dynamique(file_bytes):
         if emp_rows and sum_cols:
             name_counts = {}
             for r in emp_rows:
-                val = ws.cell(row=r, column=nom_col).value
-                p_val = ws.cell(row=r, column=first_name_col).value if first_name_col is not None else None
+                val = ws.cell(row=r, column=emp_col).value
+                p_val = ws.cell(row=r, column=prenom_col).value if prenom_col is not None else None
                 key = (str(val).strip() if val is not None else "", str(p_val).strip() if p_val is not None else "")
                 if key[0] or key[1]:
                     name_counts[key] = name_counts.get(key, 0) + 1
@@ -851,7 +870,7 @@ def generer_etiquettes_pdf(employees_data):
         left = x + 8
         line_y = y + receipt_height - 58
         name = emp['nom']
-        total = int(emp['total']) if emp['total'] == int(emp['total']) else emp['total']
+        total = safe_int_or_float(emp['total'])
         value = int(total * MILK_UNIT_PRICE)
 
         rows_text = [
