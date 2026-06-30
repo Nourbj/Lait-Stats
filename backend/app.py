@@ -962,15 +962,21 @@ def labels():
         response.headers["Content-Disposition"] = f"attachment; filename=recus_lait_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
         return response
     except Exception as e:
+        details = ""
+        if 'file_bytes' in locals():
+            details = f" (Taille: {len(file_bytes)} octets, Début: {file_bytes[:10]})"
+        error_msg = f"{str(e)}{details}"
+        import sys
+        print(f"ERROR labels: {error_msg}", file=sys.stderr)
         try:
             log_path = os.path.join(os.path.dirname(__file__), 'error.log')
             with open(log_path, 'a', encoding='utf-8') as logf:
-                logf.write(f"[{datetime.now().isoformat()}] Exception in labels:\n")
+                logf.write(f"[{datetime.now().isoformat()}] Exception in labels: {error_msg}\n")
                 logf.write(traceback.format_exc())
                 logf.write('\n')
         except Exception:
             pass
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": error_msg}), 500
 
 # â”€â”€ Routes API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 @app.route("/api/preview", methods=["POST"])
@@ -1056,15 +1062,21 @@ def download():
             response.headers["Content-Disposition"] = f"attachment; filename=rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
             return response
     except Exception as e:
+        details = ""
+        if 'file_bytes' in locals():
+            details = f" (Taille: {len(file_bytes)} octets, Début: {file_bytes[:10]})"
+        error_msg = f"{str(e)}{details}"
+        import sys
+        print(f"ERROR download: {error_msg}", file=sys.stderr)
         try:
             log_path = os.path.join(os.path.dirname(__file__), 'error.log')
             with open(log_path, 'a', encoding='utf-8') as logf:
-                logf.write(f"[{datetime.now().isoformat()}] Exception in labels:\n")
+                logf.write(f"[{datetime.now().isoformat()}] Exception in download: {error_msg}\n")
                 logf.write(traceback.format_exc())
                 logf.write('\n')
         except Exception:
             pass
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": error_msg}), 500
 
 
 @app.route("/api/health")
