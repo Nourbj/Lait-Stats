@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 import openpyxl
 from openpyxl.cell.cell import MergedCell
@@ -957,12 +957,10 @@ def labels():
 
         pdf_bytes = generer_etiquettes_pdf(labels_data)
 
-        return send_file(
-            io.BytesIO(pdf_bytes),
-            mimetype="application/pdf",
-            as_attachment=True,
-            download_name=f"recus_lait_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-        )
+        response = make_response(pdf_bytes)
+        response.headers["Content-Type"] = "application/pdf"
+        response.headers["Content-Disposition"] = f"attachment; filename=recus_lait_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        return response
     except Exception as e:
         try:
             log_path = os.path.join(os.path.dirname(__file__), 'error.log')
@@ -1044,24 +1042,19 @@ def download():
                 writer.writerow([val if val is not None else "" for val in row])
             
             csv_bytes = output.getvalue().encode('utf-8-sig') # UTF-8 with BOM for Excel compatibility
-            return send_file(
-                io.BytesIO(csv_bytes),
-                mimetype="text/csv",
-                as_attachment=True,
-                download_name=f"rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
-            )
+            response = make_response(csv_bytes)
+            response.headers["Content-Type"] = "text/csv"
+            response.headers["Content-Disposition"] = f"attachment; filename=rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+            return response
         else:
             # Export to Excel
             buf = io.BytesIO()
             processed_wb.save(buf)
-            buf.seek(0)
             excel_bytes = buf.getvalue()
-            return send_file(
-                io.BytesIO(excel_bytes),
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                as_attachment=True,
-                download_name=f"rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-            )
+            response = make_response(excel_bytes)
+            response.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            response.headers["Content-Disposition"] = f"attachment; filename=rapport_total_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            return response
     except Exception as e:
         try:
             log_path = os.path.join(os.path.dirname(__file__), 'error.log')
