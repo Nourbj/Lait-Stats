@@ -249,7 +249,7 @@ def employee_key_for_row(ws, row, identity_cols):
         values.append(str(value).strip() if value is not None else '')
     return tuple(values)
 
-def process_attendance_quantity_sheet(ws, header_row, emp_rows):
+def process_attendance_quantity_sheet(ws, header_row, emp_rows, emp_col=None, prenom_col=None, emp_cells=None):
     presence_col = find_column_by_header(ws, header_row, {'presence'})
     if not presence_col:
         return False
@@ -318,6 +318,10 @@ def process_attendance_quantity_sheet(ws, header_row, emp_rows):
         quantity_cell.font = Font(bold=True, size=22)
         quantity_cell.alignment = Alignment(horizontal='center', vertical='center')
 
+        if emp_cells is not None and emp_col is not None:
+            emp_key = get_employee_key(ws, first_row, header_row, emp_col, prenom_col)
+            emp_cells[emp_key] = quantity_cell.coordinate
+
         if last_row > first_row:
             ws.merge_cells(start_row=first_row, start_column=quantite_col, end_row=last_row, end_column=quantite_col)
 
@@ -341,7 +345,7 @@ def detect_structure(ws):
         "telephone", "tel", "email", "mail", "status", "embauche", "contrat",
         "commentaire", "comment", "note", "observation", "remarque", "sexe",
         "genre", "age", "date", "jour", "month", "mois", "annee", "year",
-        "temps", "time", "timestamp", "horodatage"
+        "temps", "time", "timestamp", "horodatage", "prix", "price", "valeur", "montant"
     }
 
     max_r = min(30, ws.max_row)
@@ -497,7 +501,144 @@ def detect_structure(ws):
     return header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col
 
 
+def is_summary_sheet(ws, header_row, sum_cols):
+    presence_col = find_column_by_header(ws, header_row, {'presence'})
+    if presence_col:
+        return False
+        
+    months = {"janvier", "fevrier", "mars", "avril", "mai", "juin", 
+              "juillet", "aout", "septembre", "octobre", "novembre", "decembre"}
+    
+    match_count = 0
+    for c in sum_cols:
+        val = normalize_str(ws.cell(row=header_row, column=c).value)
+        if any(m in val for m in months):
+            match_count += 1
+            
+    return match_count > 0
+
+def name_columns_for_key(ws, header_row, emp_col, prenom_col):
+    nom_col = None
+    first_name_col = None
+
+    for c in range(1, ws.max_column + 1):
+        header_norm = normalize_str(ws.cell(row=header_row, column=c).value)
+        if header_norm in {'nom', 'nom.'}:
+            nom_col = c
+        elif header_norm in {'prenom', 'prenom.'} or (header_norm.startswith('pr') and 'nom' in header_norm):
+            first_name_col = c
+
+    return nom_col or emp_col, first_name_col or prenom_col
+
+
+def is_name_candidate(value):
+    if value is None:
+        return False
+    value_str = str(value).strip()
+    if not value_str or value_str.startswith('='):
+        return False
+    if re.fullmatch(r'[\d\s:./-]+', value_str):
+        return False
+    value_norm = normalize_str(value_str)
+    if value_norm in {'total', 'somme', 'sum', 'totaux'}:
+        return False
+    return any(ch.isalpha() for ch in value_str)
+
+
+def name_signature(name):
+    tokens = re.findall(r'[a-z0-9]+', normalize_str(name))
+    tokens = [token for token in tokens if not token.isdigit()]
+    return ' '.join(sorted(tokens))
+
+
+def employee_name_candidates(ws, row, header_row, emp_col, prenom_col):
+    candidates = []
+
+    def add_candidate(value):
+        if is_name_candidate(value):
+            candidate = normalize_str(value)
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+    nom_col, first_name_col = name_columns_for_key(ws, header_row, emp_col, prenom_col)
+    nom = ws.cell(row=row, column=nom_col).value if nom_col is not None else None
+    prenom = ws.cell(row=row, column=first_name_col).value if first_name_col is not None else None
+
+    if is_name_candidate(prenom) and is_name_candidate(nom):
+        add_candidate(format_employee_name(prenom, nom))
+        add_candidate(f"{nom} {prenom}")
+    elif is_name_candidate(prenom):
+        add_candidate(prenom)
+    elif is_name_candidate(nom):
+        add_candidate(nom)
+
+    for c in range(1, ws.max_column + 1):
+        header_norm = normalize_str(ws.cell(row=header_row, column=c).value)
+        if header_norm in {'date', 'jour', 'time', 'temps', 'heure', 'presence', 'quantite', 'total', 'prix'}:
+            continue
+        add_candidate(ws.cell(row=row, column=c).value)
+
+    return candidates
+
+
+def get_employee_key(ws, row, header_row, emp_col, prenom_col):
+    matricule_col = find_column_by_header(ws, header_row, {'matricule', 'matricule.'})
+    emp_no_col = find_column_by_header(ws, header_row, {'emp no', 'emp no.'})
+    
+    code_val = None
+    if matricule_col:
+        val = ws.cell(row=row, column=matricule_col).value
+        if val is not None and str(val).strip():
+            code_val = str(val).strip().lower()
+    elif emp_no_col:
+        val = ws.cell(row=row, column=emp_no_col).value
+        if val is not None and str(val).strip():
+            code_val = str(val).strip().lower()
+
+    candidates = employee_name_candidates(ws, row, header_row, emp_col, prenom_col)
+    name_val = candidates[0] if candidates else ''
+    
+    return (code_val, name_val)
+
+
+def quote_sheet_formula_name(sheet_name):
+    escaped_name = sheet_name.replace("'", "''")
+    return f"'{escaped_name}'"
+
+def find_employee_cell(sheet_cells, emp_key):
+    code, name = emp_key
+    if code:
+        for (c, n), coord in sheet_cells.items():
+            if c == code:
+                return coord
+    if name:
+        for (c, n), coord in sheet_cells.items():
+            if n == name:
+                return coord
+
+        wanted_signature = name_signature(name)
+        if wanted_signature:
+            for (c, n), coord in sheet_cells.items():
+                if name_signature(n) == wanted_signature:
+                    return coord
+    return None
+
+
+def find_total_rows_anywhere(ws, header_row):
+    total_headers = {"total", "somme", "sum", "totaux"}
+    rows = []
+    for r in range(header_row + 1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            if normalize_str(ws.cell(row=r, column=c).value) in total_headers:
+                rows.append(r)
+                break
+    return rows
+
 def process_workbook_in_place(wb):
+    sheet_employee_cells = {} # sheet_name -> { emp_key -> cell_coordinate }
+    summary_sheets = [] # list of (ws, header_row, emp_col, prenom_col, emp_rows, sum_cols, existing_total_col)
+
+    # First Pass: Process monthly sheets and collect employee cells
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         
@@ -506,7 +647,15 @@ def process_workbook_in_place(wb):
         if not emp_rows or not sum_cols:
             continue
 
-        if process_attendance_quantity_sheet(ws, header_row, emp_rows):
+        # Check if summary sheet
+        if is_summary_sheet(ws, header_row, sum_cols):
+            summary_sheets.append((ws, header_row, emp_col, prenom_col, emp_rows, sum_cols, existing_total_col))
+            continue
+            
+        sheet_employee_cells[sheet_name] = {}
+        
+        # If it's an attendance quantity sheet
+        if process_attendance_quantity_sheet(ws, header_row, emp_rows, emp_col, prenom_col, sheet_employee_cells[sheet_name]):
             continue
             
         # Determine layout type
@@ -611,6 +760,10 @@ def process_workbook_in_place(wb):
             cell = ws.cell(row=r, column=total_col, value=row_sum)
             copy_style(ws.cell(row=r, column=sum_cols[-1]), cell)
             
+            # Save cell coordinate
+            emp_key = get_employee_key(ws, r, header_row, emp_col, prenom_col)
+            sheet_employee_cells[sheet_name][emp_key] = cell.coordinate
+            
         # Populate totals for summary rows
         if emp_rows:
             for r in total_rows:
@@ -621,7 +774,79 @@ def process_workbook_in_place(wb):
                         col_sum += v
                 cell = ws.cell(row=r, column=total_col, value=col_sum)
                 copy_style(ws.cell(row=r, column=sum_cols[-1]), cell)
+
+    # Second Pass: Process summary sheets and populate formulas
+    for ws, header_row, emp_col, prenom_col, emp_rows, sum_cols, existing_total_col in summary_sheets:
+        # Find all existing total columns
+        total_cols = []
+        for c in range(max(emp_col, prenom_col or 0) + 1, ws.max_column + 1):
+            header_val = ws.cell(row=header_row, column=c).value
+            header_norm = normalize_str(header_val)
+            if header_norm in {"total", "somme", "sum", "totaux"}:
+                total_cols.append(c)
                 
+        if total_cols:
+            total_col = total_cols[0]
+        else:
+            total_col = ws.max_column + 1
+            hdr_cell = ws.cell(row=header_row, column=total_col, value="Total")
+            copy_style(ws.cell(row=header_row, column=sum_cols[-1]), hdr_cell)
+            
+        # Fill month columns using formulas to other sheets
+        for c in sum_cols:
+            month_header = normalize_str(ws.cell(row=header_row, column=c).value)
+            
+            # Find the matching sheet name
+            matching_sheet_name = None
+            for name in sheet_employee_cells.keys():
+                if month_header in normalize_str(name):
+                    matching_sheet_name = name
+                    break
+                    
+            if matching_sheet_name:
+                for r in emp_rows:
+                    emp_key = get_employee_key(ws, r, header_row, emp_col, prenom_col)
+                    cell_coord = find_employee_cell(sheet_employee_cells[matching_sheet_name], emp_key)
+                    if cell_coord:
+                        # Write the Excel formula referencing the sheet
+                        ws.cell(row=r, column=c, value=f"=SUM({quote_sheet_formula_name(matching_sheet_name)}!{cell_coord})")
+                    else:
+                        ws.cell(row=r, column=c, value=0)
+            else:
+                # If no matching sheet name found, fill with 0
+                for r in emp_rows:
+                    ws.cell(row=r, column=c, value=0)
+                    
+        # Fill row totals using formulas
+        start_col_letter = get_column_letter(sum_cols[0])
+        end_col_letter = get_column_letter(sum_cols[-1])
+        total_col_letter = get_column_letter(total_col)
+        price_col = find_column_by_header(ws, header_row, {'prix', 'price', 'valeur', 'montant'})
+        total_rows = sorted(set(total_rows) | set(find_total_rows_anywhere(ws, header_row)))
+        for r in emp_rows:
+            formula = f"=SUM({start_col_letter}{r}:{end_col_letter}{r})"
+            cell = ws.cell(row=r, column=total_col, value=formula)
+            copy_style(ws.cell(row=r, column=sum_cols[-1]), cell)
+
+            if price_col and price_col != total_col:
+                price_cell = ws.cell(row=r, column=price_col, value=f"={total_col_letter}{r}*{MILK_UNIT_PRICE}")
+                copy_style(cell, price_cell)
+            
+
+        for r in total_rows:
+            for c in sum_cols:
+                col_letter = get_column_letter(c)
+                cell = ws.cell(row=r, column=c, value=f"=SUM({col_letter}{emp_rows[0]}:{col_letter}{emp_rows[-1]})")
+                copy_style(ws.cell(row=r - 1, column=c), cell)
+
+            total_cell = ws.cell(row=r, column=total_col, value=f"=SUM({start_col_letter}{r}:{end_col_letter}{r})")
+            copy_style(ws.cell(row=r - 1, column=total_col), total_cell)
+
+            if price_col and price_col != total_col:
+                price_col_letter = get_column_letter(price_col)
+                price_cell = ws.cell(row=r, column=price_col, value=f"=SUM({price_col_letter}{emp_rows[0]}:{price_col_letter}{emp_rows[-1]})")
+                copy_style(ws.cell(row=r - 1, column=price_col), price_cell)
+            
     return wb
 
 
@@ -978,7 +1203,6 @@ def labels():
             pass
         return jsonify({"error": error_msg}), 500
 
-# â”€â”€ Routes API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 @app.route("/api/preview", methods=["POST"])
 def preview():
     """Upload un fichier, retourne les donnÃ©es JSON pour le dashboard."""
