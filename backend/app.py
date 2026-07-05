@@ -636,7 +636,7 @@ def find_total_rows_anywhere(ws, header_row):
 
 def process_workbook_in_place(wb):
     sheet_employee_cells = {} # sheet_name -> { emp_key -> cell_coordinate }
-    summary_sheets = [] # list of (ws, header_row, emp_col, prenom_col, emp_rows, sum_cols, existing_total_col)
+    summary_sheets = [] # list of (ws, header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col)
 
     # First Pass: Process monthly sheets and collect employee cells
     for sheet_name in wb.sheetnames:
@@ -649,7 +649,7 @@ def process_workbook_in_place(wb):
 
         # Check if summary sheet
         if is_summary_sheet(ws, header_row, sum_cols):
-            summary_sheets.append((ws, header_row, emp_col, prenom_col, emp_rows, sum_cols, existing_total_col))
+            summary_sheets.append((ws, header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col))
             continue
             
         sheet_employee_cells[sheet_name] = {}
@@ -775,8 +775,8 @@ def process_workbook_in_place(wb):
                 cell = ws.cell(row=r, column=total_col, value=col_sum)
                 copy_style(ws.cell(row=r, column=sum_cols[-1]), cell)
 
-    # Second Pass: Process summary sheets and populate formulas
-    for ws, header_row, emp_col, prenom_col, emp_rows, sum_cols, existing_total_col in summary_sheets:
+    # Second Pass: Process summary sheets and populate calculated values
+    for ws, header_row, emp_col, prenom_col, emp_rows, total_rows, sum_cols, existing_total_col in summary_sheets:
         # Find all existing total columns
         total_cols = []
         for c in range(max(emp_col, prenom_col or 0) + 1, ws.max_column + 1):
@@ -792,7 +792,7 @@ def process_workbook_in_place(wb):
             hdr_cell = ws.cell(row=header_row, column=total_col, value="Total")
             copy_style(ws.cell(row=header_row, column=sum_cols[-1]), hdr_cell)
             
-        # Fill month columns using formulas to other sheets
+        # Fill month columns with already calculated values from the matching monthly sheets
         for c in sum_cols:
             month_header = normalize_str(ws.cell(row=header_row, column=c).value)
             
@@ -804,12 +804,13 @@ def process_workbook_in_place(wb):
                     break
                     
             if matching_sheet_name:
+                source_ws = wb[matching_sheet_name]
                 for r in emp_rows:
                     emp_key = get_employee_key(ws, r, header_row, emp_col, prenom_col)
                     cell_coord = find_employee_cell(sheet_employee_cells[matching_sheet_name], emp_key)
                     if cell_coord:
-                        # Write the Excel formula referencing the sheet
-                        ws.cell(row=r, column=c, value=f"=SUM({quote_sheet_formula_name(matching_sheet_name)}!{cell_coord})")
+                        source_value = numeric_value(source_ws[cell_coord].value)
+                        ws.cell(row=r, column=c, value=safe_int_or_float(source_value))
                     else:
                         ws.cell(row=r, column=c, value=0)
             else:
@@ -817,34 +818,32 @@ def process_workbook_in_place(wb):
                 for r in emp_rows:
                     ws.cell(row=r, column=c, value=0)
                     
-        # Fill row totals using formulas
-        start_col_letter = get_column_letter(sum_cols[0])
-        end_col_letter = get_column_letter(sum_cols[-1])
-        total_col_letter = get_column_letter(total_col)
+        # Fill row totals with calculated values
         price_col = find_column_by_header(ws, header_row, {'prix', 'price', 'valeur', 'montant'})
         total_rows = sorted(set(total_rows) | set(find_total_rows_anywhere(ws, header_row)))
         for r in emp_rows:
-            formula = f"=SUM({start_col_letter}{r}:{end_col_letter}{r})"
-            cell = ws.cell(row=r, column=total_col, value=formula)
+            row_total = sum(numeric_value(ws.cell(row=r, column=c).value) for c in sum_cols)
+            cell = ws.cell(row=r, column=total_col, value=safe_int_or_float(row_total))
             copy_style(ws.cell(row=r, column=sum_cols[-1]), cell)
 
             if price_col and price_col != total_col:
-                price_cell = ws.cell(row=r, column=price_col, value=f"={total_col_letter}{r}*{MILK_UNIT_PRICE}")
+                price_cell = ws.cell(row=r, column=price_col, value=safe_int_or_float(row_total * MILK_UNIT_PRICE))
                 copy_style(cell, price_cell)
             
 
         for r in total_rows:
             for c in sum_cols:
-                col_letter = get_column_letter(c)
-                cell = ws.cell(row=r, column=c, value=f"=SUM({col_letter}{emp_rows[0]}:{col_letter}{emp_rows[-1]})")
+                col_total = sum(numeric_value(ws.cell(row=er, column=c).value) for er in emp_rows)
+                cell = ws.cell(row=r, column=c, value=safe_int_or_float(col_total))
                 copy_style(ws.cell(row=r - 1, column=c), cell)
 
-            total_cell = ws.cell(row=r, column=total_col, value=f"=SUM({start_col_letter}{r}:{end_col_letter}{r})")
+            summary_total = sum(numeric_value(ws.cell(row=r, column=c).value) for c in sum_cols)
+            total_cell = ws.cell(row=r, column=total_col, value=safe_int_or_float(summary_total))
             copy_style(ws.cell(row=r - 1, column=total_col), total_cell)
 
             if price_col and price_col != total_col:
-                price_col_letter = get_column_letter(price_col)
-                price_cell = ws.cell(row=r, column=price_col, value=f"=SUM({price_col_letter}{emp_rows[0]}:{price_col_letter}{emp_rows[-1]})")
+                price_total = sum(numeric_value(ws.cell(row=er, column=price_col).value) for er in emp_rows)
+                price_cell = ws.cell(row=r, column=price_col, value=safe_int_or_float(price_total))
                 copy_style(ws.cell(row=r - 1, column=price_col), price_cell)
             
     return wb
