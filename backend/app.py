@@ -1030,19 +1030,23 @@ def label_name_for_row(ws, row, nom_col, prenom_col):
     return format_label_name(prenom, nom)
 
 def employee_label_key(ws, row, header_row, emp_col, prenom_col):
+    nom_col, first_name_col = label_name_columns(ws, header_row, emp_col, prenom_col)
+    name_val = normalize_str(label_name_for_row(ws, row, nom_col, first_name_col))
+    if name_val:
+        return ('name', name_val)
+
     matricule_col = find_column_by_header(ws, header_row, {'matricule', 'matricule.'})
     emp_no_col = find_column_by_header(ws, header_row, {'emp no', 'emp no.'})
     if matricule_col:
         value = ws.cell(row=row, column=matricule_col).value
         if value is not None and str(value).strip():
-            return ('matricule', str(value).strip())
+            return ('matricule', str(value).strip().lower())
     if emp_no_col:
         value = ws.cell(row=row, column=emp_no_col).value
         if value is not None and str(value).strip():
-            return ('emp_no', str(value).strip())
+            return ('emp_no', str(value).strip().lower())
 
-    nom_col, first_name_col = label_name_columns(ws, header_row, emp_col, prenom_col)
-    return ('name', normalize_str(label_name_for_row(ws, row, nom_col, first_name_col)))
+    return ('name', '')
 
 
 def add_label_total(labels_map, order, key, name, amount):
@@ -1142,37 +1146,39 @@ def labels():
 
             presence_col = find_column_by_header(ws, header_row, {'presence'})
             if presence_col:
+                per_employee_total = {}
                 for r in emp_rows:
                     name = label_name_for_row(ws, r, nom_col, first_name_col)
                     key = employee_label_key(ws, r, header_row, emp_col, prenom_col)
-                    add_label_total(labels_map, order, key, name, numeric_value(ws.cell(row=r, column=presence_col).value))
+                    current_total = per_employee_total.setdefault(key, {'nom': name, 'total': 0})
+                    current_total['total'] += numeric_value(ws.cell(row=r, column=presence_col).value)
+
+                for key, values in per_employee_total.items():
+                    add_label_total(labels_map, order, key, values['nom'], values['total'])
                 continue
 
-            if not sum_cols:
+            total_col = existing_total_col
+            if total_col is None:
+                total_col = find_column_by_header(ws, header_row, {'total', 'totaux', 'somme', 'sum'})
+
+            if not sum_cols and total_col is None:
                 continue
 
-            name_counts = {}
+            per_employee_total = {}
             for r in emp_rows:
-                val = ws.cell(row=r, column=nom_col).value
-                p_val = ws.cell(row=r, column=first_name_col).value if first_name_col is not None else None
-                key = (str(val).strip() if val is not None else '', str(p_val).strip() if p_val is not None else '')
-                if key[0] or key[1]:
-                    name_counts[key] = name_counts.get(key, 0) + 1
+                name = label_name_for_row(ws, r, nom_col, first_name_col)
+                key = employee_label_key(ws, r, header_row, emp_col, prenom_col)
 
-            is_list_layout = bool(name_counts and max(name_counts.values()) > 1)
+                if total_col is not None and not sum_cols:
+                    row_total = numeric_value(ws.cell(row=r, column=total_col).value)
+                else:
+                    row_total = sum(numeric_value(ws.cell(row=r, column=c).value) for c in sum_cols)
 
-            if is_list_layout:
-                for r in emp_rows:
-                    name = label_name_for_row(ws, r, nom_col, first_name_col)
-                    key = employee_label_key(ws, r, header_row, emp_col, prenom_col)
-                    row_total = sum(numeric_value(ws.cell(row=r, column=c).value) for c in sum_cols)
-                    add_label_total(labels_map, order, key, name, row_total)
-            else:
-                for r in emp_rows:
-                    name = label_name_for_row(ws, r, nom_col, first_name_col)
-                    key = employee_label_key(ws, r, header_row, emp_col, prenom_col)
-                    row_total = sum(numeric_value(ws.cell(row=r, column=c).value) for c in sum_cols)
-                    add_label_total(labels_map, order, key, name, row_total)
+                current_total = per_employee_total.setdefault(key, {'nom': name, 'total': 0})
+                current_total['total'] += row_total
+
+            for key, values in per_employee_total.items():
+                add_label_total(labels_map, order, key, values['nom'], values['total'])
 
         labels_data = [labels_map[key] for key in order if labels_map[key]['total'] > 0]
 
